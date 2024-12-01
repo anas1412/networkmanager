@@ -1,7 +1,7 @@
 Network Manager Pro
 Overview
 
-Network Manager Pro is a Python-based GUI application for managing and monitoring network devices. It provides powerful features such as network scanning, device blocking, bandwidth limiting, and exporting device data. The tool is built with PyQt5 and utilizes various libraries for network operations.
+Network Manager is a Python-based GUI application for managing and monitoring network devices. It provides powerful features such as network scanning, device blocking, bandwidth limiting, and exporting device data. The tool is built with PyQt5 and utilizes various libraries for network operations.
 Features
 
     Network Scanning: Identify devices connected to your network with detailed information, including IP addresses, MAC addresses, hostnames, and device types.
@@ -27,14 +27,7 @@ To install the libraries, run:
 
 pip install PyQt5 scapy python-nmap psutil netifaces wmi
 
-Installation
 
-    Clone the repository:
-
-    git clone https://github.com/yourusername/network-manager-pro.git
-    cd network-manager-pro
-
-    Install the dependencies as listed in the prerequisites.
 
 Usage
 
@@ -55,27 +48,7 @@ Key Components
     Device Blocking: Implements Windows Firewall rules to block devices.
     Bandwidth Limiting: Applies QoS policies to manage bandwidth usage.
 
-Screenshots
-
-Add screenshots here if available.
-Contributing
-
-Contributions are welcome! Follow these steps to contribute:
-
-    Fork the repository.
-    Create a new branch:
-
-git checkout -b feature-name
-
-Make your changes and commit:
-
-git commit -m "Add feature-name"
-
-Push the changes to your fork:
-
-    git push origin feature-name
-
-    Create a pull request.
+=
 
 License
 

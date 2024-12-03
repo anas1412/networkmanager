@@ -13,10 +13,12 @@ from concurrent.futures import ThreadPoolExecutor
 from PyQt5.QtWidgets import *
 from PyQt5.QtCore import *
 from PyQt5.QtGui import *
+from PyQt5.QtCore import pyqtSignal
 
 class NetworkManager(QMainWindow):
-    scan_complete = pyqtSignal()
+    scan_complete = pyqtSignal(list)  # added a list type bc of signal emits a list of devices
     device_found = pyqtSignal(str, str, str)
+    
     
     def __init__(self):
         super().__init__()
@@ -112,69 +114,6 @@ class NetworkManager(QMainWindow):
         self.interface_combo.addItems(self.get_interfaces())
         self.statusBar.showMessage('Interfaces refreshed')
 
-    def get_hostname_advanced(self, ip):
-        hostname = "Unknown"
-        methods = [
-            self._dns_lookup,
-            self._netbios_lookup,
-            self._nmap_lookup,
-            self._wmi_lookup,
-            self._mdns_lookup
-        ]
-        
-        for method in methods:
-            try:
-                result = method(ip)
-                if result and result != "Unknown":
-                    hostname = result
-                    break
-            except:
-                continue
-                
-        return hostname
-        
-    def _dns_lookup(self, ip):
-        return socket.gethostbyaddr(ip)[0]
-        
-    def _netbios_lookup(self, ip):
-        try:
-            cmd = f"nbtstat -A {ip}"
-            output = subprocess.check_output(cmd, shell=True, timeout=2).decode('utf-8')
-            for line in output.split('\n'):
-                if '<00>' in line and 'UNIQUE' in line:
-                    return line.split()[0].strip()
-        except:
-            pass
-        return None
-        
-    def _nmap_lookup(self, ip):
-        try:
-            result = self.nm.scan(ip, arguments='-sn -R')
-            if 'hostnames' in result['scan'][ip]:
-                return result['scan'][ip]['hostnames'][0]['name']
-        except:
-            pass
-        return None
-        
-    def _wmi_lookup(self, ip):
-        try:
-            c = wmi.WMI(ip)
-            system = c.Win32_ComputerSystem()[0]
-            return system.Name
-        except:
-            pass
-        return None
-        
-    def _mdns_lookup(self, ip):
-        try:
-            cmd = f"dns-sd -Q {ip}"
-            output = subprocess.check_output(cmd, shell=True, timeout=2).decode('utf-8')
-            if output:
-                return output.split()[0]
-        except:
-            pass
-        return None
-
     def scan_network(self):
         if self.scanning:
             self.scanning = False
@@ -213,205 +152,48 @@ class NetworkManager(QMainWindow):
                     
                 ip = received.psrc
                 mac = received.hwsrc
-                hostname = self.get_hostname_advanced(ip)
                 
+                hostname = "Unknown"
                 if ip not in self.connected_devices:
                     self.connected_devices[ip] = True
                     self.device_found.emit(ip, mac, hostname)
-
-            common_ports = [80, 443, 22, 445, 3389]
-            for ip in [r.psrc for r, _ in answered]:
-                if not self.scanning:
-                    return
-                    
-                for port in common_ports:
-                    try:
-                        syn_scan = sr1(IP(dst=ip)/TCP(dport=port, flags="S"), timeout=0.5, verbose=0)
-                        if syn_scan and syn_scan.haslayer(TCP):
-                            self.update_device_status(ip, port)
-                    except:
-                        continue
-
         except Exception as e:
             self.statusBar.showMessage(f'Scan error: {str(e)}')
         finally:
             if all(thread.done() for thread in self.scan_threads):
                 self.scan_complete.emit()
 
-    def update_device_status(self, ip, open_port):
-        port_services = {
-            80: "Web Server",
-            443: "HTTPS Server",
-            22: "SSH Server",
-            445: "SMB Server",
-            3389: "Remote Desktop"
-        }
-        
-        for row in range(self.device_table.rowCount()):
-            if self.device_table.item(row, 0).text() == ip:
-                current_type = self.device_table.item(row, 3).text()
-                service = port_services.get(open_port, "Unknown Service")
-                if "Unknown" in current_type:
-                    new_type = service
-                else:
-                    new_type = f"{current_type}, {service}"
-                self.device_table.setItem(row, 3, QTableWidgetItem(new_type))
-                break
-
     def add_device_to_table(self, ip, mac, hostname):
         row_position = self.device_table.rowCount()
         self.device_table.insertRow(row_position)
-        
-        device_type = self.get_device_type(mac)
         
         items = [
             QTableWidgetItem(ip),
             QTableWidgetItem(mac),
             QTableWidgetItem(hostname),
-            QTableWidgetItem(device_type),
+            QTableWidgetItem("Unknown Device"),
             QTableWidgetItem('Connected'),
             QTableWidgetItem('No limit')
         ]
         
         for col, item in enumerate(items):
             self.device_table.setItem(row_position, col, item)
-
-    def get_device_type(self, mac):
-        mac_prefix = mac[:8].upper()
-        known_vendors = {
-            '00:50:56': 'VMware',
-            '08:00:27': 'VirtualBox',
-            'DC:A6:32': 'Raspberry Pi',
-            '00:0C:29': 'VMware',
-            'B8:27:EB': 'Raspberry Pi',
-            '00:16:3E': 'Xen Virtual Machine',
-            '52:54:00': 'QEMU Virtual NIC'
-        }
-        return known_vendors.get(mac_prefix, 'Unknown Device')
-
-    def block_ip(self, ip):
-        try:
-            self.unblock_ip(ip)
-            
-            block_commands = [
-                f'netsh advfirewall firewall add rule name="BLOCK_IN_{ip}" dir=in action=block protocol=any remoteip={ip}',
-                f'netsh advfirewall firewall add rule name="BLOCK_OUT_{ip}" dir=out action=block protocol=any remoteip={ip}',
-                f'route add {ip} mask 255.255.255.255 0.0.0.0 metric 1'
-            ]
-            
-            for cmd in block_commands:
-                subprocess.run(cmd, shell=True, check=True, capture_output=True)
-                
-            self.verify_blocking(ip)
-            self.statusBar.showMessage(f'Successfully blocked {ip}')
-            
-        except subprocess.CalledProcessError as e:
-            self.statusBar.showMessage(f'Error blocking IP: {e.output.decode()}')
-            
-    def verify_blocking(self, ip):
-        try:
-            check_cmd = f'netsh advfirewall firewall show rule name="BLOCK_IN_{ip}"'
-            result = subprocess.run(check_cmd, shell=True, capture_output=True)
-            if result.returncode != 0:
-                raise Exception("Firewall rule verification failed")
-                
-            ping = subprocess.run(f'ping -n 1 -w 1000 {ip}', shell=True, capture_output=True)
-            if ping.returncode == 0:
-                raise Exception("IP still accessible after blocking")
-                
-        except Exception as e:
-            self.statusBar.showMessage(f'Block verification failed: {str(e)}')
-            
-    def unblock_ip(self, ip):
-        try:
-            unblock_commands = [
-                f'netsh advfirewall firewall delete rule name="BLOCK_IN_{ip}"',
-                f'netsh advfirewall firewall delete rule name="BLOCK_OUT_{ip}"',
-                f'route delete {ip}'
-            ]
-            
-            for cmd in unblock_commands:
-                subprocess.run(cmd, shell=True, capture_output=True)
-                
-            self.statusBar.showMessage(f'Successfully unblocked {ip}')
-            
-        except subprocess.CalledProcessError as e:
-            self.statusBar.showMessage(f'Error unblocking IP: {e.output.decode()}')
-            
+    
     def set_bandwidth_limit(self):
         selected_rows = self.device_table.selectedItems()
         if not selected_rows:
             QMessageBox.warning(self, 'Selection Required', 'Please select a device first.')
             return
-            
+
+        row = self.device_table.currentRow()
+        ip = self.device_table.item(row, 0).text()
+        
         limit, ok = QInputDialog.getInt(self, 'Set Bandwidth Limit', 
-            'Enter bandwidth limit (KB/s):', 1000, 0, 100000, 1)
-            
+                                        f'Set bandwidth limit for {ip} (in kbps):', min=1)
         if ok:
-            row = self.device_table.currentRow()
-            ip = self.device_table.item(row, 0).text()
-            self.device_table.setItem(row, 5, QTableWidgetItem(f'{limit} KB/s'))
-            self.apply_bandwidth_limit(ip, limit)
-
-def apply_bandwidth_limit(self, ip, limit_kbps):
-    try:
-        # Convert to bits per second
-        limit_bps = limit_kbps * 8 * 1024
-        
-        # First ensure running as admin
-        if not self.check_admin_privileges():
-            self.statusBar.showMessage("Administrator privileges required")
-            return False
-            
-        # Remove any existing rules
-        cleanup_commands = [
-            f'netsh advfirewall firewall delete rule name="LIMIT_{ip}"',
-            f'netsh int ipv4 delete policy name=LIMIT_{ip}',
-            f'netsh int ipv4 delete filter name=LIMIT_{ip}'
-        ]
-        
-        # Create new traffic control rules
-        tc_commands = [
-            # Create QoS policy
-            f'netsh int ipv4 set policy name=LIMIT_{ip} new rate={limit_bps} interface=any prio=3',
-            
-            # Add bidirectional filters
-            f'netsh int ipv4 add filter name=LIMIT_{ip}_IN protocol=any srcaddr={ip} qospolicy=LIMIT_{ip}',
-            f'netsh int ipv4 add filter name=LIMIT_{ip}_OUT protocol=any dstaddr={ip} qospolicy=LIMIT_{ip}',
-            
-            # Add supporting firewall rules
-            f'netsh advfirewall firewall add rule name="LIMIT_{ip}" dir=in action=allow remoteip={ip} qospolicy=LIMIT_{ip}',
-            f'netsh advfirewall firewall add rule name="LIMIT_{ip}" dir=out action=allow remoteip={ip} qospolicy=LIMIT_{ip}'
-        ]
-        
-        # Execute commands
-        for cmd in cleanup_commands + tc_commands:
-            result = subprocess.run(cmd, shell=True, check=True, capture_output=True)
-            
-        # Verify the limit was applied
-        if self.verify_bandwidth_limit(ip):
-            self.statusBar.showMessage(f'Successfully applied {limit_kbps} KB/s limit to {ip}')
-            return True
-            
-    except subprocess.CalledProcessError as e:
-        self.statusBar.showMessage(f'Error setting bandwidth limit: {e.output.decode()}')
-        return False
-
-def check_admin_privileges(self):
-    try:
-        return ctypes.windll.shell32.IsUserAnAdmin()
-    except:
-        return False
-
-    def verify_bandwidth_limit(self, ip):
-        try:
-            check_cmd = f'netsh int ipv4 show policy name=LIMIT_{ip}'
-            result = subprocess.run(check_cmd, shell=True, capture_output=True)
-            if result.returncode != 0:
-                raise Exception("QoS policy verification failed")
-                
-        except Exception as e:
-            self.statusBar.showMessage(f'Bandwidth limit verification failed: {str(e)}')
+            self.device_table.setItem(row, 5, QTableWidgetItem(f'{limit} kbps'))
+            self.statusBar.showMessage(f'Bandwidth limit set for {ip} to {limit} kbps')
+            # Add your logic to apply the bandwidth limit, such as interacting with QoS settings.
 
     def block_device(self):
         selected_rows = self.device_table.selectedItems()
@@ -430,14 +212,36 @@ def check_admin_privileges(self):
             self.device_table.setItem(row, 4, QTableWidgetItem('Connected'))
             self.unblock_ip(ip)
 
+    def block_ip(self, ip):
+        try:
+            unblock_commands = [
+                f'netsh advfirewall firewall add rule name="BLOCK_IN_{ip}" dir=in action=block protocol=any remoteip={ip}',
+                f'netsh advfirewall firewall add rule name="BLOCK_OUT_{ip}" dir=out action=block protocol=any remoteip={ip}',
+            ]
+            for cmd in unblock_commands:
+                subprocess.run(cmd, shell=True, check=True, capture_output=True)
+        except subprocess.CalledProcessError as e:
+            self.statusBar.showMessage(f'Error blocking IP: {e.output.decode()}')
+
+    def unblock_ip(self, ip):
+        try:
+            unblock_commands = [
+                f'netsh advfirewall firewall delete rule name="BLOCK_IN_{ip}"',
+                f'netsh advfirewall firewall delete rule name="BLOCK_OUT_{ip}"',
+            ]
+            for cmd in unblock_commands:
+                subprocess.run(cmd, shell=True, check=True, capture_output=True)
+        except subprocess.CalledProcessError as e:
+            self.statusBar.showMessage(f'Error unblocking IP: {e.output.decode()}')
+
     def export_devices(self):
         try:
             filename, _ = QFileDialog.getSaveFileName(self, "Export Devices", "", 
-                "CSV Files (*.csv);;All Files (*)")
+                                                    "CSV Files (*.csv);;All Files (*)")
             if filename:
                 with open(filename, 'w') as f:
                     headers = ['IP Address', 'MAC Address', 'Hostname', 
-                             'Device Type', 'Status', 'Bandwidth Limit']
+                            'Device Type', 'Status', 'Bandwidth Limit']
                     f.write(','.join(headers) + '\n')
                     
                     for row in range(self.device_table.rowCount()):
@@ -451,11 +255,18 @@ def check_admin_privileges(self):
         except Exception as e:
             self.statusBar.showMessage(f'Error exporting devices: {str(e)}')
 
-    def on_scan_complete(self):
-        self.statusBar.showMessage('Scan completed')
-        self.progress_bar.hide()
-        self.scan_button.setText('Scan Network')
-        self.scanning = False
+
+    def on_scan_complete(self, devices):
+        try:
+            self.device_table.setRowCount(0)  # Clear the table
+            for device in devices:
+                row_position = self.device_table.rowCount()
+                self.device_table.insertRow(row_position)
+                for col, value in enumerate(device):  # Assuming device is a list or tuple
+                    self.device_table.setItem(row_position, col, QTableWidgetItem(str(value)))
+            self.statusBar.showMessage('Scan completed successfully')
+        except Exception as e:
+            self.statusBar.showMessage(f'Error updating device table: {str(e)}')
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)

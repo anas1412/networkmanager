@@ -13,10 +13,12 @@ from concurrent.futures import ThreadPoolExecutor
 from PyQt5.QtWidgets import *
 from PyQt5.QtCore import *
 from PyQt5.QtGui import *
+from PyQt5.QtCore import pyqtSignal
 
 class NetworkManager(QMainWindow):
-    scan_complete = pyqtSignal()
+    scan_complete = pyqtSignal(list)  # added a list type bc of signal emits a list of devices
     device_found = pyqtSignal(str, str, str)
+    
     
     def __init__(self):
         super().__init__()
@@ -231,6 +233,40 @@ class NetworkManager(QMainWindow):
                 subprocess.run(cmd, shell=True, check=True, capture_output=True)
         except subprocess.CalledProcessError as e:
             self.statusBar.showMessage(f'Error unblocking IP: {e.output.decode()}')
+
+    def export_devices(self):
+        try:
+            filename, _ = QFileDialog.getSaveFileName(self, "Export Devices", "", 
+                                                    "CSV Files (*.csv);;All Files (*)")
+            if filename:
+                with open(filename, 'w') as f:
+                    headers = ['IP Address', 'MAC Address', 'Hostname', 
+                            'Device Type', 'Status', 'Bandwidth Limit']
+                    f.write(','.join(headers) + '\n')
+                    
+                    for row in range(self.device_table.rowCount()):
+                        row_data = []
+                        for col in range(self.device_table.columnCount()):
+                            item = self.device_table.item(row, col)
+                            row_data.append(item.text() if item else '')
+                        f.write(','.join(row_data) + '\n')
+                        
+                self.statusBar.showMessage(f'Devices exported to {filename}')
+        except Exception as e:
+            self.statusBar.showMessage(f'Error exporting devices: {str(e)}')
+
+
+    def on_scan_complete(self, devices):
+        try:
+            self.device_table.setRowCount(0)  # Clear the table
+            for device in devices:
+                row_position = self.device_table.rowCount()
+                self.device_table.insertRow(row_position)
+                for col, value in enumerate(device):  # Assuming device is a list or tuple
+                    self.device_table.setItem(row_position, col, QTableWidgetItem(str(value)))
+            self.statusBar.showMessage('Scan completed successfully')
+        except Exception as e:
+            self.statusBar.showMessage(f'Error updating device table: {str(e)}')
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
